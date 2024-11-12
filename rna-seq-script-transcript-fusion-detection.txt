@@ -1,0 +1,446 @@
+“RNAseq-Pipeline” outlines a pipeline for processing RNA sequencing data. 
+
+############### bcl-2-fastq ##############
+## go to --> /projects/fs1_no-backup/incoming_data/190905_NS500145_0324_AHF237BGXC
+## save SampleSheet.csv in that folder
+
+# load module
+module load GCCcore/6.3.0 bcl2fastq/2.19.1
+
+# converting bcl files into FASTQ format 
+bcl2fastq -p 20 --no-lane-splitting --sample-sheet SampleSheet.csv &> bcl2fastq.log
+
+-p 20: specify 20 threads for parallel processing
+--no-lane-splitting: data from all lanes combined to one FASTQ files per sample
+--sample-sheet SampleSheet.csv: use SampleSheet, define the samples and specify the barcodes for demultiplexing the data.
+&> bcl2fastq.log: redirect both std output and error messages to log file
+
+# fastq.gz files are now there
+/projects/fs1_no-backup/incoming_data/190905_NS500145_0324_AHF237BGXC/Data/Intensities/BaseCalls
+
+or ## already got fastq files from CTG!
+
+
+############### move fastq.gz files to fs2 pi_name ###############
+## from Harddisk via inbox
+
+mv *fastq.gz /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-FFPE/RNAseq-FFPE-2019-09-05
+
+
+############### make folders ###############
+## (go to the path where you moved the files to)
+
+
+# list each fastq file type, extract a unique identifier, create a dir for each sample, moves corresponding FASTQ files into dir
+ls -1 *fastq.bz2 | cut -d_ -f1 | uniq | while read sample; do mkdir $sample; mv ${sample}*fastq* $sample; done
+
+ls -1 *fq.bam | cut -d '-' -f 1-2 | uniq | while read sample; do mkdir $sample; mv ${sample}*fastq.gz $sample; done
+
+(## just move files in already existing directories with the sample name)
+
+ls -1 *fastq.gz | cut -d_ -f1 | uniq | while read sample; do mv ${sample}*fastq.gz $sample; done
+
+
+
+#### testing around
+# does not work yet
+for i in .
+do
+    mv $i {cut -d '-' -f 1-2 $i}
+done
+
+############### run fastqc for quality control ###############
+### takes around 15 minutes
+### with fastq.gz files
+
+# configure SLURM, a job scheduler, to allocate resources for the FastQC job
+#!/bin/bash
+#SBATCH -A lsens2018-3-4
+#SBATCH -t 80:00:00
+#SBATCH --mem=250GB
+#SBATCH --ntasks-per-node=40
+
+- #SBATCH -A: Specifies the account for job tracking.
+- #SBATCH -t 80:00:00: Sets a maximum runtime of 80 hours.
+- #SBATCH --mem=250GB: Requests 250 GB of memory.
+- #SBATCH --ntasks-per-node=40: Assigns 40 tasks (parallel jobs) per node, ideal for large datasets.
+
+# load FastQC and GNU Parallel, which allows running FastQC on multiple files simultaneously.
+module load GCC/4.9.3-2.25  OpenMPI/1.10.2  fastqc/0.11.3
+module load parallel/20160622
+
+# run fastqc on each fastq.gz file within the specified directory.
+parallel -k -j10 -v "fastqc {}" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-2015-01-20/*-*/*.gz
+-j10: Specifies 10 concurrent jobs
+-v: Enables verbose output
+
+### with bz2 files
+
+#!/bin/bash
+#SBATCH -A lsens2018-3-4
+#SBATCH -t 80:00:00
+#SBATCH --mem=250GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/4.9.3-2.25  OpenMPI/1.10.2
+module load FastQC/0.11.8-Java-11
+
+
+# process .bz2 file, uncompressed using custom script (pbzcat.sh), and temporarily save with the base filename.
+for file in /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-01-28/*-*/*.bz2;
+do
+    base=$(basename $file .bz2)
+    ~/bin/pbzcat.sh $file > ./$base
+    fastqc -o ../FASTQC/ ./$base;
+    rm ./$base
+done
+# fastqc run on the uncompressed file, with output directed to the ../FASTQC/ directory.
+# temporary uncompressed file deleted.
+
+
+
+##############################
+##                          ##
+##    Gene Expression!      ##
+##                          ##
+##############################
+
+############### STAR-alignment ###############
+
+#!/bin/sh
+#SBATCH -t 80:00:00
+#SBATCH --mem=228GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/4.9.3-binutils-2.25 STAR/2.5.0a
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j4 -k --progress -N2 "STAR --genomeDir /projects/fs1_no-backup/JAKOB-references/Homo_sapiens/UCSC/hg19/Sequence/StarIndex/ \
+--readFilesCommand zcat \
+      --readFilesIn {1} {2} \
+      --twopassMode Basic \
+      --chimSegmentMin 12 \
+      --chimJunctionOverhangMin 12 \
+      --alignSJDBoverhangMin 10 \
+      --alignMatesGapMax 200000 \
+      --alignIntronMax 200000 \
+      --chimSegmentReadGapMax parameter 3 \
+      --alignSJstitchMismatchNmax 5 -1 5 5 \
+      --runThreadN 10 \
+      --limitBAMsortRAM 31532137230 \
+      --outSAMtype BAM SortedByCoordinate \
+      --chimOutType WithinBAM \
+      --outSAMstrandField intronMotif \
+--outFileNamePrefix {1.}_ \
+--outFilterMultimapNmax 200" :::  /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/*-*/*.gz
+
+--genomeDir: directory containing the STAR index for the reference genome
+--readFilesCommand zcat: decompresses fastq.gz files on-the-fly.
+--readFilesIn {1} {2}: specifies paired-end reads for alignment.
+--twopassMode Basic: activates STAR’s two-pass mode, enhancing splice junction detection.
+The remaining parameters (chimSegmentMin, alignMatesGapMax, etc.) control aspects of alignment accuracy and specificity
+--runThreadN 10: Sets the number of threads to 10
+--limitBAMsortRAM: Limits RAM usage for sorting the output BAM file.
+--outSAMtype BAM SortedByCoordinate: Specifies that output should be in BAM format, sorted by coordinate.
+--chimOutType WithinBAM: Outputs chimeric alignments within the BAM file, useful for fusion detection.
+--outFileNamePrefix: Sets a prefix for the output files, making it easier to identify files by sample.
+--outFilterMultimapNmax: Limits the maximum number of multiple mappings for each read, reducing ambiguities in alignment.
+
+############### move files and make folders ###############
+## move files from fs2 to fs1
+## move all files except the fastq.gz readFiles
+## fastqc files could stay there as well, they don´t take too much space
+
+mv */*fastq_* /projects/fs1_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-CTG-2019-08-12/STAR-bam
+
+## make folders in fs1 after you moved the files
+
+ls -1 *fastq_Log.out | cut -d_ -f1 | uniq | while read sample; do mkdir $sample; mv ${sample}*fastq* $sample; done
+
+
+#################### idxstats ################################
+# first index the files to make the process quicker
+
+module load GCC/4.9.3-2.25  OpenMPI/1.10.2
+module load SAMtools/1.3.1-HTSlib-1.3.1
+
+for i in STAR-bam/*-*/*.bam
+do
+    samtools index $i
+done
+
+# run idxstats on the bamfiles
+
+for i in STAR-bam/*-*/*.bam
+do
+    samtools idxstats $i > $i.idxstats
+done
+
+
+#################### Quali Map ################################
+## qualimap rnaseq performs the RNA-seq QC analysis
+## pe - paired end
+
+#!/bin/sh
+#SBATCH -t 80:00:00
+#SBATCH --mem=228GB
+#SBATCH --ntasks-per-node=40
+
+
+module load QualiMap/2.2.1
+prefix="${1##*/}"
+prefix="${1/.bam/}"
+export DISPLAY=""
+
+qualimap rnaseq -pe \
+-bam /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-bam/*-*/*.bam \
+-gtf "/projects/fs1_no-backup/JAKOB-references/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.gtf" \
+-outdir "/projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/QualiMap/" \
+-outfile "$prefix" \
+-outformat "HTML" \
+--java-mem-size=64G >& "${prefix}-qualimap.log"
+
+-pe: Indicates that paired-end data is being processed.
+-bam: Specifies the directory containing the BAM files generated by STAR.
+-gtf: Points to a GTF annotation file for the reference genome (hg19), essential for associating reads with genes.
+-outdir and -outfile: Define the output directory and file name prefix.
+-outformat "HTML": Sets the output format to HTML for easy visualization.
+--java-mem-size=64G: Allocates 64 GB of memory to Java, which Qualimap requires for processing large datasets.
+
+###################### feature Counts #########################################
+
+#!/bin/sh
+#SBATCH -t 80:00:00
+#SBATCH --mem=228GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1
+module load Subread/1.6.3
+
+featureCounts \
+-a "/projects/fs1_no-backup/JAKOB-references/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.corrected.gtf" \
+-o "/projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/featureCounts/counts.txt" \
+-F "GTF" \
+-t "exon" \
+-g "gene_id" \
+-p \
+-s 0 \
+-T 8 \
+/projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-bam/*-*/*.bam
+
+featureCounts \
+-a "/projects/fs1_no-backup/JAKOB-references/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.corrected.gtf" \
+-o "/projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/featureCounts/counts.new.txt" \
+-F "GTF" \
+-t "exon" \
+-g "gene_id" \
+-p \
+/projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-bam/*-*/*.bam
+
+-a: Specifies the GTF file for the reference genome, which contains annotated gene features.
+-o: Sets the output file for gene counts.
+-F "GTF": Indicates that the annotation format is GTF.
+-t "exon": Counts reads overlapping exons, aligning with typical RNAseq protocols focused on coding regions.
+-g "gene_id": Summarizes counts per gene_id feature, providing total counts for each gene.
+
+####################### Multi-QC #####################################################
+module load icc/2017.4.196-GCC-6.4.0-2.28  impi/2017.3.196 ifort/2017.4.196-GCC-6.4.0-2.28  impi/2017.3.196
+module load MultiQC/1.2-Python-2.7.14
+
+multiqc --interactive .
+
+################ cuffquant ###############
+
+#!/bin/sh
+#SBATCH -t 80:00:00
+#SBATCH --mem=228GB
+#SBATCH --ntasks-per-node=40
+
+module load icc/2015.3.187-GNU-4.9.3-2.25  impi/5.0.3.048 ifort/2015.3.187-GNU-4.9.3-2.25 Cufflinks/2.2.1-Python-2.7.10-Boost-1.59.0
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j4 -k " cuffquant -p 4 -o {.}.expression /projects/fs1_no-backup/JAKOB-references/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.gtf {}" ::: /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05//STAR-bam/*-*/*.bam
+
+- cuffquant -p 4: Runs cuffquant using 4 threads, directing output to separate folders for each sample ({.}.expression).
+- Uses the genes.gtf file for annotation.
+- parallel -v -j4 -k: Executes cuffquant on multiple BAM files concurrently, improving processing efficiency.
+
+
+################ add your samples to a sample sheet ###############
+
+for file in /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-*/STAR-bam/*-*/*exp*/*.cxb; do sample=$(echo $file | cut -d/ -f8 | sed 's/_RNA//g'); nm="${sample}"; echo -e "$file\t$nm"; done > SampleSheet-FFPE-2019-09-05.txt
+- creates a sample sheet listing the .cxb files (Cuffquant output) and sample names, which can be used in downstream analysis.
+
+
+## cut out/exclude sample (caused problems)
+grep -v '26549' SampleSheet-FFPE-2019-09-05.txt >> SampleSheet-exclude-FFPE-2019-09-05.txt
+
+
+############### cuffnorm - normalization ###############
+
+#!/bin/sh
+#SBATCH -t 80:00:00
+#SBATCH --mem=228GB
+#SBATCH --ntasks-per-node=40
+
+module load icc/2015.3.187-GNU-4.9.3-2.25 impi/5.0.3.048 ifort/2015.3.187-GNU-4.9.3-2.25 Cufflinks/2.2.1-Python-2.7.10-Boost-1.59.0
+
+cuffnorm -p 20 -o /projects/fs1_no-backup/ls1-pi_name/RNAseq-Expression/FFPE-Expression/FFPE-2019-09-05 --use-sample-sheet /projects/fs1_no-backup/ls1-pi_name/Downloads/software/Homo_sapiens/UCSC/hg19/Annotation/Genes/genes.gtf SampleSheet-exclude-FFPE-2019-09-05.txt
+-p 20: Specifies 20 parallel processes, improving the processing speed.
+-o: Defines the output directory for normalized expression results.
+--use-sample-sheet: Points to the sample sheet file with pre-filtered samples (from SampleSheet-exclude-FFPE-2019-09-05.txt).
+The GTF file provides gene annotations, enabling gene-level normalization across samples.
+
+### add header to sample sheet
+
+for file in SampleSheet-Fresh-Tumor-only_final.txt; do echo "$file"$'\n'"$(cat -- "$file")" > "$file"; done
+
+
+ ##############################
+ ##                          ##
+ ##    Finding Fusions!      ##
+ ##                          ##
+ ##############################
+
+############### STAR-fusion ###############
+## Very fast! Can take fastq files or a Chimeric.out.junction file generated during STAR alignment.
+## I usually run with --min_junction_reads 0. The --examine_coding_effect and --FusionInspector inspect might not work and can be removed..
+
+#!/bin/bash
+#SBATCH -t 80:00:00
+#SBATCH --mem=128GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtools/1.4 BCFtools/1.8 Java/1.8.0_92
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j8 -k \
+--progress -N2 \
+" STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
+ --left_fq {1} \
+ --right_fq {2} \
+ --output_dir /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-Winter-Run1+2-2016/StarFusion-results_5972-16/{1/.}/ \
+ --min_junction_reads 0 --min_sum_frags 1 --require_LDAS 0 " ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
+
+
+ ################ STAR-fusion with junction file ###############
+## possible to run it in the terminal, only takes like a few minutes
+
+#!/bin/bash
+#SBATCH -t 80:00:00
+#SBATCH --mem=128GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtools/1.4 BCFtools/1.8 Java/1.8.0_92
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j8 -k --progress \
+"STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
+ -J {} \
+ --min_junction_reads 0 --min_sum_frags 1 --require_LDAS 0 \
+ --output_dir /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-fusion/{/.}.star_fusion_junc_outdir " ::: /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-bam/*-*/*Chimeric.out.junction
+
+## make STAR-fusion folder and move the star fusion output in there
+## move the output to the folder
+mv *-*/*Chimeric.out.star_fusion_junc_outdir /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-CTG-2019-05-20/STAR-fusion/
+
+#### rename the outputfile  "star-fusion.fusion_predictions.tsv" so that it contains the name of the folder (stand in STAR-fusion folder)
+## i means all the folders/files where I stand in
+
+for i in *;do
+    cd $i
+    mv star-fusion.fusion_predictions.tsv $i.star-fusion.fusion_predictions.tsv
+    cd ..
+    done
+
+### add header to output file whith sample name (otherwise there would be no specification of the samplename in the file)
+
+for file in */*.star-fusion.fusion_predictions.tsv; do echo "$file"$'\n'"$(cat -- "$file")" > "$file"; done
+
+### fuse all files together
+
+cat */*.star-fusion.fusion_predictions.tsv >> 2019-09-05-FFPE-merged-star-fusion.fusion_predictions.tsv
+
+#######  Karim
+
+#!/bin/sh
+#SBATCH -t 10:00:00
+
+#SBATCH --mem=250GB
+#SBATCH --ntasks-per-node=40
+
+module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtools/1.4 BCFtools/1.8 Java/1.8.0_92
+
+/projects/fs1_no-backup/ls1-hansen/karimsaba/Software/parallel/bin/parallel -v -j5 -k --progress \
+"STAR-Fusion \
+--genome_lib_dir /projects/fs1_no-backup/JAKOB-references/STAR-Fusion_db/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir \
+-J {} \
+--output_dir /projects/fs3_no-backup/ls1-hansen/2018_RNAseq_all-samples/STAR_Fusion/{/}/" ::: /projects/fs3_no-backup/ls1-hansen/2018_RNAseq_all-samples/BAM/*/*Chimeric.out.junction
+
+
+############### Fusioncatcher ###############
+
+### Pretty slow but advanced. Can be strict -> low number of false positives but might miss stuff.
+#!/bin/bash
+#SBATCH -t 80:00:00
+#SBATCH --mem=128GB
+#SBATCH --ntasks-per-node=40
+
+ module load GCC/5.4.0-2.26 OpenMPI/1.10.3
+ module load FusionCatcher/1.0
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel --dryrun -v -j4 -k --progress -N2 \
+" fusioncatcher -d /sw/pkg/FusionCatcher/data/current \
+ -p 10 -i {1},{2} \
+ -o /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-Winter-Run1+2-2016/Fusioncatcher-results_5972-16/{1/.}/" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
+
+
+
+#### rename the outputfile  "final-list_candidate-fusion-genes.hg19.txt" so that it contains the name of the folder (stand in fusioncatcher-results folder)
+
+for i in *;do
+    cd $i
+    mv final-list_candidate-fusion-genes.hg19.txt $i.final-list_candidate-fusion-genes.hg19.txt
+    cd ..
+    done
+
+### add header to output file whith sample name
+
+for file in */*candidate-fusion-genes.hg19.txt; do echo "$file"$'\n'"$(cat -- "$file")" > "$file"; done
+
+### fuse all files together
+
+cat */*candidate-fusion-genes.hg19.txt > 2019-08-12-Fresh-CTG-merged-fusion-catcher.hg19.txt
+
+
+############## chimerascan ##################
+
+#!/bin/bash
+#SBATCH -t 80:00:00
+#SBATCH --mem=240GB
+#SBATCH --ntasks-per-node=40
+
+module load icc/2015.3.187-GNU-4.9.3-2.25  impi/5.0.3.048 Bowtie2/2.2.6 Bowtie/1.1.2
+module load GCC/4.9.3-2.25 OpenMPI/1.10.2 chimerascan/0.4.5a
+
+/projects/fs1_no-backup/gennasfs/parallel/bin/parallel --dryrun \
+-v -j4 -k --progress -N2 \
+"chimerascan_run.py /projects/fs1_no-backup/ls1-pi_name/Downloads/software/chimerascan-0.4.5/chimerascan_indexes \
+-p 10 {1} {2} /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-CTG-2020-05-15/chimerascan-results/{1/.}/ --quals=illumina --rm-tmp" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/849-07/*.bz2
+
+#### rename output file
+
+for i in *;do
+    cd $i
+    mv chimeras.bedpe $i.chimeras.bedpe
+    cd ..
+    done
+
+#### add header line with filename
+
+for file in */*.chimeras.bedpe; do echo "$file"$'\n'"$(cat -- "$file")" > "$file"; done
+
+### rename all directories/files in one go ###
+
+for i in *;do
+  a=$(echo $i | cut -d_ -f1)
+  mv $i $a;
+done
+
+
