@@ -24,7 +24,7 @@ or ## already got fastq files from CTG!
 ############### move fastq.gz files to fs2 pi_name ###############
 ## from Harddisk via inbox
 
-mv *fastq.gz /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-FFPE/RNAseq-FFPE-2019-09-05
+mv *fastq.gz /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-FFPE/RNAseq-FFPE-2019-09-05
 
 
 ############### make folders ###############
@@ -70,7 +70,7 @@ module load GCC/4.9.3-2.25  OpenMPI/1.10.2  fastqc/0.11.3
 module load parallel/20160622
 
 # run fastqc on each fastq.gz file within the specified directory.
-parallel -k -j10 -v "fastqc {}" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-2015-01-20/*-*/*.gz
+parallel -k -j10 -v "fastqc {}" ::: /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-2015-01-20/*-*/*.gz
 -j10: Specifies 10 concurrent jobs
 -v: Enables verbose output
 
@@ -87,7 +87,7 @@ module load FastQC/0.11.8-Java-11
 
 
 # process .bz2 file, uncompressed using custom script (pbzcat.sh), and temporarily save with the base filename.
-for file in /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-01-28/*-*/*.bz2;
+for file in /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-01-28/*-*/*.bz2;
 do
     base=$(basename $file .bz2)
     ~/bin/pbzcat.sh $file > ./$base
@@ -131,7 +131,7 @@ module load GCC/4.9.3-binutils-2.25 STAR/2.5.0a
       --chimOutType WithinBAM \
       --outSAMstrandField intronMotif \
 --outFileNamePrefix {1.}_ \
---outFilterMultimapNmax 200" :::  /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/*-*/*.gz
+--outFilterMultimapNmax 200" :::  /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/*-*/*.gz
 
 --genomeDir: directory containing the STAR index for the reference genome
 --readFilesCommand zcat: decompresses fastq.gz files on-the-fly.
@@ -313,11 +313,11 @@ module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtool
 
 /projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j8 -k \
 --progress -N2 \
-" STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
+" STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/gname_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
  --left_fq {1} \
  --right_fq {2} \
  --output_dir /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-Winter-Run1+2-2016/StarFusion-results_5972-16/{1/.}/ \
- --min_junction_reads 0 --min_sum_frags 1 --require_LDAS 0 " ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
+ --min_junction_reads 0 --min_sum_frags 1 --require_LDAS 0 " ::: /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
 
 
  ################ STAR-fusion with junction file ###############
@@ -331,7 +331,7 @@ module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtool
 module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtools/1.4 BCFtools/1.8 Java/1.8.0_92
 
 /projects/fs1_no-backup/gennasfs/parallel/bin/parallel -v -j8 -k --progress \
-"STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
+"STAR-Fusion --genome_lib_dir /projects/fs2_backup/ls1-pi_name/gname_FASTQ/DataBases/GRCh37_v19_CTAT_lib_Feb092018_2/ctat_genome_lib_build_dir/ \
  -J {} \
  --min_junction_reads 0 --min_sum_frags 1 --require_LDAS 0 \
  --output_dir /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-fusion/{/.}.star_fusion_junc_outdir " ::: /projects/fs1_no-backup/ls1-pi_name/RNAseq-FFPE/RNAseq-FFPE-2019-09-05/STAR-bam/*-*/*Chimeric.out.junction
@@ -388,7 +388,7 @@ module load GCC/5.4.0-2.26  OpenMPI/1.10.3 STAR-Fusion/1.4.0-Perl-5.24.0 SAMtool
 /projects/fs1_no-backup/gennasfs/parallel/bin/parallel --dryrun -v -j4 -k --progress -N2 \
 " fusioncatcher -d /sw/pkg/FusionCatcher/data/current \
  -p 10 -i {1},{2} \
- -o /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-Winter-Run1+2-2016/Fusioncatcher-results_5972-16/{1/.}/" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
+ -o /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-Winter-Run1+2-2016/Fusioncatcher-results_5972-16/{1/.}/" ::: /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-Winter-Run1-2016/5972-16/*.gz
 
 
 
@@ -422,7 +422,7 @@ module load GCC/4.9.3-2.25 OpenMPI/1.10.2 chimerascan/0.4.5a
 /projects/fs1_no-backup/gennasfs/parallel/bin/parallel --dryrun \
 -v -j4 -k --progress -N2 \
 "chimerascan_run.py /projects/fs1_no-backup/ls1-pi_name/Downloads/software/chimerascan-0.4.5/chimerascan_indexes \
--p 10 {1} {2} /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-CTG-2020-05-15/chimerascan-results/{1/.}/ --quals=illumina --rm-tmp" ::: /projects/fs2_backup/ls1-pi_name/Mertens_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/849-07/*.bz2
+-p 10 {1} {2} /projects/fs3_no-backup/ls1-pi_name/RNAseq-Fresh/RNAseq-CTG-2020-05-15/chimerascan-results/{1/.}/ --quals=illumina --rm-tmp" ::: /projects/fs2_backup/ls1-pi_name/gname_FASTQ/RNAseq-Fresh/RNAseq-CTG-2020-05-15/849-07/*.bz2
 
 #### rename output file
 
